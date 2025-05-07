@@ -30,12 +30,14 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/rclone/rclone/backend/box/api"
 	"github.com/rclone/rclone/fs"
+	"github.com/rclone/rclone/fs/cache"
 	"github.com/rclone/rclone/fs/config"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
 	"github.com/rclone/rclone/fs/config/obscure"
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/fs/fshttp"
+	"github.com/rclone/rclone/fs/fspath"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/lib/dircache"
 	"github.com/rclone/rclone/lib/encoder"
@@ -179,6 +181,10 @@ See: https://developer.box.com/guides/authentication/jwt/as-user/
 				encoder.EncodeBackSlash |
 				encoder.EncodeRightSpace |
 				encoder.EncodeInvalidUtf8),
+		}, {
+			Name:     "upload_remote",
+			Default:  "",
+			Advanced: true,
 		}}...),
 	})
 }
@@ -280,6 +286,7 @@ type Options struct {
 	ListChunk     int                  `config:"list_chunk"`
 	OwnedBy       string               `config:"owned_by"`
 	Impersonate   string               `config:"impersonate"`
+	UploadRemote  string               `config:"upload_remote"`
 }
 
 // ItemMeta defines metadata we cache for each Item ID
@@ -302,6 +309,7 @@ type Fs struct {
 	uploadToken     *pacer.TokenDispenser // control concurrency
 	itemMetaCacheMu *sync.Mutex           // protects itemMetaCache
 	itemMetaCache   map[string]ItemMeta   // map of Item ID to selected metadata
+	uploadRemote    fs.Fs
 }
 
 // Object describes a box object
@@ -457,6 +465,20 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		}
 	}
 
+	var uploadRemote fs.Fs = nil
+	if opt.UploadRemote != "" {
+		baseName, basePath, err := fspath.SplitFs(opt.UploadRemote)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse remote %q to wrap: %w", opt.UploadRemote, err)
+		}
+		// Look for a file first
+		remotePath := fspath.JoinRootPath(basePath, root)
+		uploadRemote, err = cache.Get(ctx, baseName+remotePath)
+		if err != fs.ErrorIsFile && err != nil {
+			return nil, fmt.Errorf("failed to make remote %q to wrap: %w", baseName+remotePath, err)
+		}
+	}
+
 	ci := fs.GetConfig(ctx)
 	f := &Fs{
 		name:            name,
@@ -467,6 +489,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		uploadToken:     pacer.NewTokenDispenser(ci.Transfers),
 		itemMetaCacheMu: new(sync.Mutex),
 		itemMetaCache:   make(map[string]ItemMeta),
+		uploadRemote:    uploadRemote,
 	}
 	f.features = (&fs.Features{
 		CaseInsensitive:         true,
@@ -491,18 +514,23 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		// If using box config.json and JWT, renewing should just refresh the token and
 		// should do so whether there are uploads pending or not.
 		if ok && boxSubTypeOk && jsonFile != "" && boxSubType != "" {
+			fs.Debugf(nil, "jwt token renewer set: %s\n", name)
 			f.tokenRenewer = oauthutil.NewRenewBeforeExpiry(f.String(), ts, func() error {
+				fs.Debugf(nil, "token renewing...\n")
 				err := refreshJWTToken(ctx, jsonFile, boxSubType, name, m)
 				return err
 			})
 			f.tokenRenewer.Start()
 		} else {
+			fs.Printf(nil, "default token renewer set: %s\n", name)
 			// Renew the token in the background
 			f.tokenRenewer = oauthutil.NewRenewOnExpiry(f.String(), ts, func() error {
 				_, err := f.readMetaDataForPath(ctx, "")
 				return err
 			})
 		}
+	} else {
+		fs.Debugf(nil, "token renewer not set: %s\n", name)
 	}
 
 	// Get rootFolderID
@@ -555,8 +583,12 @@ func (f *Fs) rootSlash() string {
 //
 // If it can't be found it returns the error fs.ErrorObjectNotFound.
 func (f *Fs) newObjectWithInfo(ctx context.Context, remote string, info *api.Item) (fs.Object, error) {
+	var fs *Fs = f
+	if f.uploadRemote != nil {
+		fs = f.uploadRemote.(*Fs)
+	}
 	o := &Object{
-		fs:     f,
+		fs:     fs,
 		remote: remote,
 	}
 	var err error
@@ -760,9 +792,13 @@ func (f *Fs) createObject(ctx context.Context, remote string, modTime time.Time,
 	if err != nil {
 		return
 	}
+	var fs *Fs = f
+	if f.uploadRemote != nil {
+		fs = f.uploadRemote.(*Fs)
+	}
 	// Temporary Object under construction
 	o = &Object{
-		fs:     f,
+		fs:     fs,
 		remote: remote,
 	}
 	return o, leaf, directoryID, nil
@@ -835,9 +871,13 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 		return f.PutUnchecked(ctx, in, src, options...)
 	}
 
+	var fs *Fs = f
+	if f.uploadRemote != nil {
+		fs = f.uploadRemote.(*Fs)
+	}
 	// If object exists then create a skeleton one with just id
 	o := &Object{
-		fs:     f,
+		fs:     fs,
 		remote: remote,
 		id:     item.ID,
 	}
@@ -1700,7 +1740,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		defer o.fs.tokenRenewer.Stop()
 	}
 
-	size := src.Size()
+	// size := src.Size()
 	modTime := src.ModTime(ctx)
 	remote := o.Remote()
 
@@ -1710,12 +1750,9 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		return err
 	}
 
-	// Upload with simple or multipart
-	if size <= int64(o.fs.opt.UploadCutoff) {
-		err = o.upload(ctx, in, leaf, directoryID, modTime, options...)
-	} else {
-		err = o.uploadMultipart(ctx, in, leaf, directoryID, size, modTime, options...)
-	}
+	// disale multipart upload
+	err = o.upload(ctx, in, leaf, directoryID, modTime, options...)
+
 	return err
 }
 
