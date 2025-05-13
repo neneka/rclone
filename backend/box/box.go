@@ -340,7 +340,7 @@ func (f *Fs) Root() string {
 
 // String converts this Fs to a string
 func (f *Fs) String() string {
-	return fmt.Sprintf("box root '%s'", f.root)
+	return fmt.Sprintf("box root '%s' (%s)", f.root, f.name)
 }
 
 // Features returns the optional features of this Fs
@@ -490,6 +490,9 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		itemMetaCacheMu: new(sync.Mutex),
 		itemMetaCache:   make(map[string]ItemMeta),
 		uploadRemote:    uploadRemote,
+	}
+	if f.uploadRemote != nil {
+		cache.PinUntilFinalized(f.uploadRemote, f)
 	}
 	f.features = (&fs.Features{
 		CaseInsensitive:         true,
