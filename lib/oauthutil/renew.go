@@ -89,6 +89,10 @@ func (r *Renew) renewToken() {
 		err := r.run()
 		if err == nil {
 			fs.Debugf(r.name, "Token refresh successful")
+			_, err = r.ts.Token()
+			if err != nil {
+				fs.Printf(r.name, "Token refresh postprocess failed: %+v\n", err)
+			}
 		} else {
 			fs.Errorf(r.name, "Token refresh failed: %v", err)
 		}
