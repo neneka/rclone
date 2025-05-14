@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/lib/readers"
@@ -445,13 +446,20 @@ func MultipartUpload(ctx context.Context, in io.Reader, params url.Values, conte
 		}
 
 		if in != nil {
+			var watchedIn io.ReadCloser
+			if rc, ok := in.(io.ReadCloser); ok {
+				watchedIn = newSpeedWatchReader(ctx, rc, defaultInactivityTimeout)
+			} else {
+				watchedIn = newSpeedWatchReader(ctx, io.NopCloser(in), defaultInactivityTimeout)
+			}
+
 			part, err := writer.CreateFormFile(contentName, fileName)
 			if err != nil {
 				_ = bodyWriter.CloseWithError(fmt.Errorf("failed to create form file: %w", err))
 				return
 			}
 
-			_, err = io.Copy(part, in)
+			_, err = io.Copy(part, watchedIn)
 			if err != nil {
 				_ = bodyWriter.CloseWithError(fmt.Errorf("failed to copy data: %w", err))
 				return
@@ -557,4 +565,114 @@ func (api *Client) callCodec(ctx context.Context, opts *Opts, request any, respo
 	}
 	err = decode(resp, response)
 	return resp, err
+}
+
+var ErrInactivityTimeout = errors.New("transfer inactive for too long")
+
+const defaultInactivityTimeout = 1 * time.Minute
+
+type speedWatchReader struct {
+	r         io.ReadCloser      // 元のReadCloser
+	ctx       context.Context    // このリーダーの生存期間を管理するコンテキスト
+	cancelCtx context.CancelFunc // このリーダーのctxをキャンセルする関数
+
+	mu       sync.Mutex
+	lastRead time.Time
+	timer    *time.Timer
+	timeout  time.Duration
+	timedOut bool
+}
+
+func newSpeedWatchReader(ctx context.Context, r io.ReadCloser, timeout time.Duration) *speedWatchReader {
+	if timeout <= 0 {
+		timeout = defaultInactivityTimeout
+	}
+	readerCtx, readerCancel := context.WithCancel(ctx)
+
+	swr := &speedWatchReader{
+		r:         r,
+		ctx:       readerCtx,
+		cancelCtx: readerCancel,
+		lastRead:  time.Now(),
+		timeout:   timeout,
+	}
+	swr.resetTimer()
+	return swr
+}
+
+func (swr *speedWatchReader) resetTimer() {
+	swr.mu.Lock()
+	defer swr.mu.Unlock()
+
+	if swr.timer != nil {
+		swr.timer.Stop()
+	}
+	if swr.ctx.Err() != nil {
+		swr.timer = nil
+		return
+	}
+	swr.timer = time.AfterFunc(swr.timeout, func() {
+		swr.mu.Lock()
+		if time.Since(swr.lastRead) >= swr.timeout && swr.ctx.Err() == nil {
+			fs.Debugf(nil, "Cancelling transfer due to %v of inactivity.", swr.timeout)
+			swr.timedOut = true
+			if swr.cancelCtx != nil {
+				swr.cancelCtx()
+			}
+		}
+		swr.mu.Unlock()
+	})
+}
+
+func (swr *speedWatchReader) Read(p []byte) (n int, err error) {
+	if err := swr.ctx.Err(); err != nil {
+		swr.mu.Lock()
+		isTimeout := swr.timedOut
+		swr.mu.Unlock()
+		if isTimeout {
+			return 0, ErrInactivityTimeout
+		}
+		return 0, err
+	}
+
+	n, err = swr.r.Read(p)
+
+	swr.mu.Lock()
+	if n > 0 {
+		swr.lastRead = time.Now()
+	}
+	timedOutAlready := swr.timedOut
+	swr.mu.Unlock()
+
+	if timedOutAlready {
+		return n, ErrInactivityTimeout
+	}
+
+	if err != nil {
+		swr.stopTimerAndCancelContext()
+		return n, err
+	}
+
+	if n > 0 {
+		swr.resetTimer()
+	}
+
+	return n, nil
+}
+
+func (swr *speedWatchReader) Close() error {
+	swr.stopTimerAndCancelContext()
+	return swr.r.Close()
+}
+
+func (swr *speedWatchReader) stopTimerAndCancelContext() {
+	swr.mu.Lock()
+	defer swr.mu.Unlock()
+	if swr.timer != nil {
+		swr.timer.Stop()
+		swr.timer = nil
+	}
+	if swr.cancelCtx != nil {
+		swr.cancelCtx()
+	}
 }
