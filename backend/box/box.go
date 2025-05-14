@@ -518,23 +518,20 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		// If using box config.json and JWT, renewing should just refresh the token and
 		// should do so whether there are uploads pending or not.
 		if ok && boxSubTypeOk && jsonFile != "" && boxSubType != "" {
-			fs.Debugf(nil, "jwt token renewer set: %s\n", name)
+			fs.Printf(name, "jwt token renewer set\n")
 			f.tokenRenewer = oauthutil.NewRenewBeforeExpiry(f.String(), ts, func() error {
-				fs.Debugf(nil, "token renewing...\n")
+				fs.Printf(name, "token renewing...\n")
 				err := refreshJWTToken(ctx, jsonFile, boxSubType, name, m)
 				return err
 			})
 			f.tokenRenewer.Start()
 		} else {
-			fs.Printf(nil, "default token renewer set: %s\n", name)
 			// Renew the token in the background
 			f.tokenRenewer = oauthutil.NewRenewOnExpiry(f.String(), ts, func() error {
 				_, err := f.readMetaDataForPath(ctx, "")
 				return err
 			})
 		}
-	} else {
-		fs.Debugf(nil, "token renewer not set: %s\n", name)
 	}
 
 	// Get rootFolderID
