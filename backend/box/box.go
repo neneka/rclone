@@ -309,7 +309,7 @@ type Fs struct {
 	uploadToken     *pacer.TokenDispenser // control concurrency
 	itemMetaCacheMu *sync.Mutex           // protects itemMetaCache
 	itemMetaCache   map[string]ItemMeta   // map of Item ID to selected metadata
-	uploadRemote    fs.Fs
+	uploadFs        *Fs
 }
 
 // Object describes a box object
@@ -465,7 +465,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		}
 	}
 
-	var uploadRemote fs.Fs = nil
+	var uploadFs *Fs = nil
 	if opt.UploadRemote != "" {
 		baseName, basePath, err := fspath.SplitFs(opt.UploadRemote)
 		if err != nil {
@@ -473,9 +473,13 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		}
 		// Look for a file first
 		remotePath := fspath.JoinRootPath(basePath, root)
-		uploadRemote, err = cache.Get(ctx, baseName+remotePath)
+		baseFs, err := cache.Get(ctx, baseName+remotePath)
 		if err != fs.ErrorIsFile && err != nil {
 			return nil, fmt.Errorf("failed to make remote %q to wrap: %w", baseName+remotePath, err)
+		}
+		bfs, ok := baseFs.(*Fs)
+		if ok {
+			uploadFs = bfs
 		}
 	}
 
@@ -489,10 +493,10 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		uploadToken:     pacer.NewTokenDispenser(ci.Transfers),
 		itemMetaCacheMu: new(sync.Mutex),
 		itemMetaCache:   make(map[string]ItemMeta),
-		uploadRemote:    uploadRemote,
+		uploadFs:        uploadFs,
 	}
-	if f.uploadRemote != nil {
-		cache.PinUntilFinalized(f.uploadRemote, f)
+	if f.uploadFs != nil {
+		cache.PinUntilFinalized(f.uploadFs, f)
 	}
 	f.features = (&fs.Features{
 		CaseInsensitive:         true,
@@ -583,12 +587,8 @@ func (f *Fs) rootSlash() string {
 //
 // If it can't be found it returns the error fs.ErrorObjectNotFound.
 func (f *Fs) newObjectWithInfo(ctx context.Context, remote string, info *api.Item) (fs.Object, error) {
-	var fs *Fs = f
-	if f.uploadRemote != nil {
-		fs = f.uploadRemote.(*Fs)
-	}
 	o := &Object{
-		fs:     fs,
+		fs:     f,
 		remote: remote,
 	}
 	var err error
@@ -792,13 +792,9 @@ func (f *Fs) createObject(ctx context.Context, remote string, modTime time.Time,
 	if err != nil {
 		return
 	}
-	var fs *Fs = f
-	if f.uploadRemote != nil {
-		fs = f.uploadRemote.(*Fs)
-	}
 	// Temporary Object under construction
 	o = &Object{
-		fs:     fs,
+		fs:     f,
 		remote: remote,
 	}
 	return o, leaf, directoryID, nil
@@ -871,13 +867,9 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 		return f.PutUnchecked(ctx, in, src, options...)
 	}
 
-	var fs *Fs = f
-	if f.uploadRemote != nil {
-		fs = f.uploadRemote.(*Fs)
-	}
 	// If object exists then create a skeleton one with just id
 	o := &Object{
-		fs:     fs,
+		fs:     f,
 		remote: remote,
 		id:     item.ID,
 	}
@@ -1690,8 +1682,12 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 //
 // This is recommended for less than 50 MiB of content
 func (o *Object) upload(ctx context.Context, in io.Reader, leaf, directoryID string, modTime time.Time, options ...fs.OpenOption) (err error) {
+	var fs *Fs = o.fs
+	if fs.uploadFs != nil {
+		fs = fs.uploadFs
+	}
 	upload := api.UploadFile{
-		Name:              o.fs.opt.Enc.FromStandardName(leaf),
+		Name:              fs.opt.Enc.FromStandardName(leaf),
 		ContentModifiedAt: api.Time(modTime),
 		ContentCreatedAt:  api.Time(modTime),
 		Parent: api.Parent{
@@ -1716,8 +1712,8 @@ func (o *Object) upload(ctx context.Context, in io.Reader, leaf, directoryID str
 	} else {
 		opts.Path = "/files/content"
 	}
-	err = o.fs.pacer.CallNoRetry(func() (bool, error) {
-		resp, err = o.fs.srv.CallJSON(ctx, &opts, &upload, &result)
+	err = fs.pacer.CallNoRetry(func() (bool, error) {
+		resp, err = fs.srv.CallJSON(ctx, &opts, &upload, &result)
 		return shouldRetry(ctx, resp, err)
 	})
 	if err != nil {
@@ -1738,6 +1734,14 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	if o.fs.tokenRenewer != nil {
 		o.fs.tokenRenewer.Start()
 		defer o.fs.tokenRenewer.Stop()
+	}
+	fs := o.fs
+	if fs.uploadFs != nil {
+		fs = fs.uploadFs
+		if fs.tokenRenewer != nil {
+			fs.tokenRenewer.Start()
+			defer fs.tokenRenewer.Stop()
+		}
 	}
 
 	// size := src.Size()
