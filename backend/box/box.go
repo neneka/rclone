@@ -430,7 +430,7 @@ func errorHandler(resp *http.Response) error {
 	errResponse := new(api.Error)
 	err := rest.DecodeJSON(resp, &errResponse)
 	if err != nil {
-		fs.Debugf(nil, "Couldn't decode error response: %v", err)
+		fs.Debugf(nil, "Couldn't decode error response: %s(%d): %v", resp.Request.URL, resp.StatusCode, err)
 	}
 	if errResponse.Code == "" {
 		errResponse.Code = resp.Status
@@ -522,13 +522,19 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		// If using box config.json and JWT, renewing should just refresh the token and
 		// should do so whether there are uploads pending or not.
 		if ok && boxSubTypeOk && jsonFile != "" && boxSubType != "" {
-			fs.Printf(name, "jwt token renewer set\n")
 			f.tokenRenewer = oauthutil.NewRenewBeforeExpiry(f.String(), ts, func() error {
 				fs.Printf(name, "token renewing...\n")
+				tokenErr := ts.Expire()
+				if tokenErr != nil {
+					fs.Errorf(name, "token expire failed: %+v\n", tokenErr)
+				}
 				err := refreshJWTToken(ctx, jsonFile, boxSubType, name, m)
+				_, tokenErr = ts.Token()
+				if tokenErr != nil {
+					fs.Errorf(name, "token getting token: %+v\n", tokenErr)
+				}
 				return err
 			})
-			f.tokenRenewer.Start()
 		} else {
 			// Renew the token in the background
 			f.tokenRenewer = oauthutil.NewRenewOnExpiry(f.String(), ts, func() error {
