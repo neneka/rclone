@@ -84,7 +84,7 @@ All done. Please go back to rclone.
 	// BeforeExpiryDelta determines how long before a token's actual expiry
 	// that OnBeforeExpiry signals. This provides time for refreshing the token,
 	// when the refresh is handled outside of this package.
-	BeforeExpiryDelta = 5 * time.Minute
+	BeforeExpiryDelta = 30 * time.Minute
 )
 
 // OpenURL is used when rclone wants to open a browser window
