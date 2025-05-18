@@ -893,7 +893,11 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 
 	// Preflight check the upload, which returns the ID if the
 	// object already exists
-	item, err := f.preUploadCheck(ctx, leaf, directoryID, src.Size())
+	fs := f
+	if fs.uploadFs != nil {
+		fs = fs.uploadFs
+	}
+	item, err := fs.preUploadCheck(ctx, leaf, directoryID, src.Size())
 	if err != nil {
 		return nil, err
 	}
