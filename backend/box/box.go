@@ -429,7 +429,7 @@ func errorHandler(resp *http.Response) error {
 	errResponse := new(api.Error)
 	err := rest.DecodeJSON(resp, &errResponse)
 	if err != nil {
-		fs.Debugf(nil, "Couldn't decode error response: %s(%d): %v", resp.Request.URL, resp.StatusCode, err)
+		fs.Debugf(nil, "Couldn't decode error response: %s(%d): %v: %s: %s", resp.Request.URL, resp.StatusCode, err, resp.Request.Header.Get("authorization"), resp.Header.Get("www-authenticate"))
 	}
 	if errResponse.Code == "" {
 		errResponse.Code = resp.Status
