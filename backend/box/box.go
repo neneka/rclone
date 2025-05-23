@@ -1751,7 +1751,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 	}
 
-	// size := src.Size()
+	size := src.Size()
 	modTime := src.ModTime(ctx)
 	remote := o.Remote()
 
@@ -1761,8 +1761,12 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		return err
 	}
 
-	// disale multipart upload
-	err = o.upload(ctx, in, leaf, directoryID, modTime, options...)
+	// Upload with simple or multipart
+	if size <= int64(o.fs.opt.UploadCutoff) {
+		err = o.upload(ctx, in, leaf, directoryID, modTime, options...)
+	} else {
+		err = o.uploadMultipart(ctx, in, leaf, directoryID, size, modTime, options...)
+	}
 
 	return err
 }
