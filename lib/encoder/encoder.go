@@ -65,6 +65,7 @@ const (
 	EncodeSquareBracket              // []
 	EncodeSemicolon                  // ;
 	EncodeExclamation                // !
+	EncodeUnicodeBMP
 
 	// Synthetic
 	EncodeWin         = EncodeColon | EncodeQuestion | EncodeDoubleQuote | EncodeAsterisk | EncodeLtGt | EncodePipe // :?"*<>|
@@ -429,6 +430,11 @@ func (mask MultiEncoder) Encode(in string) string {
 					return true
 				}
 			}
+			if mask.Has(EncodeUnicodeBMP) {
+				if r < 0x0000 || r > 0xFFFF {
+					return true
+				}
+			}
 			return false
 		})
 	}
@@ -673,6 +679,12 @@ func (mask MultiEncoder) Encode(in string) string {
 			} else if r > symbolOffset && r <= symbolOffset+0x1F {
 				out.WriteRune(QuoteRune)
 				out.WriteRune(r)
+				continue
+			}
+		}
+		if mask.Has(EncodeUnicodeBMP) {
+			if r < 0x0000 || r > 0xFFFF {
+				out.WriteRune('￼') // U+FFFC object replacement character
 				continue
 			}
 		}

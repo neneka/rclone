@@ -181,7 +181,8 @@ See: https://developer.box.com/guides/authentication/jwt/as-user/
 			Default: (encoder.Display |
 				encoder.EncodeBackSlash |
 				encoder.EncodeRightSpace |
-				encoder.EncodeInvalidUtf8),
+				encoder.EncodeInvalidUtf8 |
+				encoder.EncodeUnicodeBMP),
 		}, {
 			Name:     "upload_remote",
 			Default:  "",
