@@ -128,7 +128,7 @@ func (r *Renew) Shutdown() {
 	}
 	// closing a channel can only be done once
 	r.shutdown.Do(func() {
-		if r.ts.expiryTimer != nil {
+		if r.ts != nil {
 			r.ts.expiryTimer.Stop()
 		}
 		if r.ts.beforeExpiryTimer != nil {
