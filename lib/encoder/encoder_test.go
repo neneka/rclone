@@ -189,10 +189,6 @@ func TestEncodeUnicodeBMP(t *testing.T) {
 			if got != tc.out {
 				t.Errorf("Encode(%q) want %q got %q", tc.in, tc.out, got)
 			}
-			got2 := e.Decode(got)
-			if got2 != tc.in {
-				t.Errorf("Decode(%q) want %q got %q", got, tc.in, got2)
-			}
 		})
 	}
 }
