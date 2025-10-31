@@ -473,7 +473,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		}
 	}
 
-	var uploadFs *Fs = nil
+	var uploadFs *Fs
 	if opt.UploadRemote != "" {
 		baseName, basePath, err := fspath.SplitFs(opt.UploadRemote)
 		if err != nil {
@@ -1723,7 +1723,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 //
 // This is recommended for less than 50 MiB of content
 func (o *Object) upload(ctx context.Context, in io.Reader, leaf, directoryID string, modTime time.Time, options ...fs.OpenOption) (err error) {
-	var fs *Fs = o.fs
+	var fs = o.fs
 	if fs.uploadFs != nil && o.size <= int64(fs.opt.UploadRemoteCutoff) {
 		fs = fs.uploadFs
 	}

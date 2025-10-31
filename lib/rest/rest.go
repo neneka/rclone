@@ -567,7 +567,7 @@ func (api *Client) callCodec(ctx context.Context, opts *Opts, request any, respo
 	return resp, err
 }
 
-var ErrInactivityTimeout = errors.New("transfer inactive for too long")
+var errInactivityTimeout = errors.New("transfer inactive for too long")
 
 const defaultInactivityTimeout = 1 * time.Minute
 
@@ -630,7 +630,7 @@ func (swr *speedWatchReader) Read(p []byte) (n int, err error) {
 		isTimeout := swr.timedOut
 		swr.mu.Unlock()
 		if isTimeout {
-			return 0, ErrInactivityTimeout
+			return 0, errInactivityTimeout
 		}
 		return 0, err
 	}
@@ -645,7 +645,7 @@ func (swr *speedWatchReader) Read(p []byte) (n int, err error) {
 	swr.mu.Unlock()
 
 	if timedOutAlready {
-		return n, ErrInactivityTimeout
+		return n, errInactivityTimeout
 	}
 
 	if err != nil {
