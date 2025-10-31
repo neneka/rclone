@@ -187,6 +187,11 @@ See: https://developer.box.com/guides/authentication/jwt/as-user/
 			Name:     "upload_remote",
 			Default:  "",
 			Advanced: true,
+		}, {
+			Name:     "upload_remote_cutoff",
+			Help:     "Cutoff for switching to use upload_remote (>= 50 MiB).",
+			Default:  fs.SizeSuffix(defaultUploadCutoff),
+			Advanced: true,
 		}}...),
 	})
 }
@@ -280,15 +285,16 @@ func getDecryptedPrivateKey(boxConfig *api.ConfigJSON) (key *rsa.PrivateKey, err
 
 // Options defines the configuration for this backend
 type Options struct {
-	UploadCutoff  fs.SizeSuffix        `config:"upload_cutoff"`
-	CommitRetries int                  `config:"commit_retries"`
-	Enc           encoder.MultiEncoder `config:"encoding"`
-	RootFolderID  string               `config:"root_folder_id"`
-	AccessToken   string               `config:"access_token"`
-	ListChunk     int                  `config:"list_chunk"`
-	OwnedBy       string               `config:"owned_by"`
-	Impersonate   string               `config:"impersonate"`
-	UploadRemote  string               `config:"upload_remote"`
+	UploadCutoff       fs.SizeSuffix        `config:"upload_cutoff"`
+	CommitRetries      int                  `config:"commit_retries"`
+	Enc                encoder.MultiEncoder `config:"encoding"`
+	RootFolderID       string               `config:"root_folder_id"`
+	AccessToken        string               `config:"access_token"`
+	ListChunk          int                  `config:"list_chunk"`
+	OwnedBy            string               `config:"owned_by"`
+	Impersonate        string               `config:"impersonate"`
+	UploadRemote       string               `config:"upload_remote"`
+	UploadRemoteCutoff fs.SizeSuffix        `config:"upload_remote_cutoff"`
 }
 
 // ItemMeta defines metadata we cache for each Item ID
@@ -1718,7 +1724,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 // This is recommended for less than 50 MiB of content
 func (o *Object) upload(ctx context.Context, in io.Reader, leaf, directoryID string, modTime time.Time, options ...fs.OpenOption) (err error) {
 	var fs *Fs = o.fs
-	if fs.uploadFs != nil {
+	if fs.uploadFs != nil && o.size <= int64(fs.opt.UploadRemoteCutoff) {
 		fs = fs.uploadFs
 	}
 	upload := api.UploadFile{
@@ -1770,8 +1776,11 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		o.fs.tokenRenewer.Start()
 		defer o.fs.tokenRenewer.Stop()
 	}
+
+	size := src.Size()
+
 	fs := o.fs
-	if fs.uploadFs != nil {
+	if fs.uploadFs != nil && size <= int64(fs.opt.UploadRemoteCutoff) {
 		fs = fs.uploadFs
 		if fs.tokenRenewer != nil {
 			fs.tokenRenewer.Start()
@@ -1779,7 +1788,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 	}
 
-	size := src.Size()
 	modTime := src.ModTime(ctx)
 	remote := o.Remote()
 
