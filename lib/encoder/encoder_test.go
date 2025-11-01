@@ -180,7 +180,7 @@ func TestEncodeUnicodeBMP(t *testing.T) {
 		{
 			mask: EncodeUnicodeBMP,
 			in:   "𠮷",
-			out:  "￼",
+			out:  "�", // U+FFFD replacement character
 		},
 	} {
 		e := tc.mask
@@ -188,6 +188,10 @@ func TestEncodeUnicodeBMP(t *testing.T) {
 			got := e.Encode(tc.in)
 			if got != tc.out {
 				t.Errorf("Encode(%q) want %q got %q", tc.in, tc.out, got)
+			}
+			got2 := e.Decode(got)
+			if got2 != tc.out {
+				t.Errorf("Decode(%q) want %q got %q", got, tc.in, got2)
 			}
 		})
 	}

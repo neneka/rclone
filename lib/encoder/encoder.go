@@ -684,7 +684,7 @@ func (mask MultiEncoder) Encode(in string) string {
 		}
 		if mask.Has(EncodeUnicodeBMP) {
 			if r < 0x0000 || r > 0xFFFF {
-				out.WriteRune('￼') // U+FFFC object replacement character
+				out.WriteRune('�') // U+FFFD replacement character
 				continue
 			}
 		}
